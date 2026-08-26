@@ -1,365 +1,405 @@
-/* ============================================================
-   SHUTTERKIF OS — boot sequence, HUD, audio, navigation.
-   Plain script; psp.js is the module and talks to us via
-   window.SK (a tiny shared bus).
-   ============================================================ */
-(function () {
-  'use strict';
+// ══ nomad · orchestration ═══════════════════════════════════════════════
+// mark → iPod → (press play) → digicam → the canvas of work → pages.
 
-  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// scene.js is NOT imported statically. It pulls three.js (1.3 MB) behind it,
+// and the lite path never renders a polygon — a static import would make every
+// phone on the planet download a renderer it will not use. See LITE below.
+import { WorkCanvas } from './canvas.js';
 
-  /* shared bus ------------------------------------------------ */
-  var SK = window.SK = {
-    ready: false,
-    _onReady: [],
-    onReady: function (fn) { this.ready ? fn() : this._onReady.push(fn); },
-    fireReady: function () {
-      this.ready = true;
-      this._onReady.splice(0).forEach(function (f) { f(); });
+let S = null;                       // the scene module, once asked for
+let ipodModel = null, camModel = null;   // in flight from the moment it is
+
+const $ = id => document.getElementById(id);
+const body      = document.body;
+const markWrap  = $('mark');
+const markVideo = $('markVideo');
+const glCanvas  = $('gl');
+const workWrap  = $('work');
+const hint      = $('hint');
+const skipBtn   = $('skip');
+const theme     = $('theme');
+const vig       = $('vig');
+
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ── the lite path ───────────────────────────────────────────────────────
+   A touch device gets the mark and then the canvas of work, and nothing in
+   between: no three.js, no PMREM, no 3.3 MB of models. Akif's call. The two
+   acts are the best thing on the desktop site and the worst thing to ask a
+   phone for — two glb loads and an environment bake before a visitor on
+   cellular has seen a single film.
+   `?full` forces the whole sequence on a phone, for checking it there. */
+const LITE = matchMedia('(pointer: coarse)').matches
+             && !/[?&]full(&|=|$)/.test(location.search);
+
+/* ── audio ──────────────────────────────────────────────────────────────
+   Muted playback is always permitted, so the track is set rolling muted on
+   the first frame: it buffers, and the user's gesture only has to unmute.
+   goAudible() is single-flight — two overlapping attempts once corrupted the
+   saved mute state and left the track silent *and* paused. Never disarm
+   except on confirmed success. */
+theme.volume = 0;
+theme.muted = true;
+let audioArmed = false, audioBusy = false, audioOn = false;
+
+function rollMuted(){
+  theme.play().catch(() => { /* even muted can be refused; the gesture retries */ });
+}
+async function goAudible(){
+  if (audioOn || audioBusy) return audioOn;
+  audioBusy = true;
+  try {
+    theme.muted = false;
+    await theme.play();
+    audioOn = true;
+    // ease the level up rather than slamming it in
+    const t0 = performance.now();
+    const ramp = (now) => {
+      // rAF hands you the timestamp of the START of the frame, which can
+      // predate the performance.now() that scheduled it — an unclamped p goes
+      // negative, the cube flips sign, and setting a negative volume throws.
+      const p = Math.max(0, Math.min(1, (now - t0) / 1400));
+      theme.volume = 0.42 * (1 - Math.pow(1 - p, 3));
+      if (p < 1) requestAnimationFrame(ramp);
+    };
+    requestAnimationFrame(ramp);
+  } catch (err) {
+    theme.muted = true;
+    theme.volume = 0;
+    rollMuted();                       // keep buffering, stay armed
+  } finally {
+    audioBusy = false;
+  }
+  return audioOn;
+}
+// a late safety net: if the intro was skipped by an odd path, any first
+// gesture still lights the track. Removed only on confirmed success.
+function armGlobalGesture(){
+  if (audioArmed) return;
+  audioArmed = true;
+  const go = async () => {
+    // the same gesture that lights the track can start a refused mark
+    if (!markWrap.hidden && markVideo.paused) markVideo.play().catch(() => {});
+    const ok = await goAudible();
+    if (ok){
+      window.removeEventListener('pointerdown', go);
+      window.removeEventListener('keydown', go);
+      window.removeEventListener('touchend', go);
     }
   };
+  window.addEventListener('pointerdown', go);
+  window.addEventListener('keydown', go);
+  window.addEventListener('touchend', go);
+}
 
-  /* ---------------------------------------------------------- */
-  /* BOOT SEQUENCE                                              */
-  /* ---------------------------------------------------------- */
-  var boot = document.getElementById('boot');
-  var fillEl = document.getElementById('bootFill');
-  var pctEl = document.getElementById('bootPct');
+/* ── routing ────────────────────────────────────────────────────────── */
+const pages = { about: $('pageAbout'), contact: $('pageContact') };
+let lastStage = 'work';
 
-  var pct = 0, targetPct = 0;
-  var bootDone = false;
-
-  function setPct(v) {
-    pct = v;
-    if (fillEl) fillEl.style.right = (100 - v) + '%';
-    if (pctEl) pctEl.textContent = String(Math.round(v)).padStart(3, '0');
+function routeFromHash(){
+  const h = (location.hash || '').replace(/^#\/?/, '');
+  return (h === 'about' || h === 'contact') ? h : '';
+}
+async function applyRoute(){
+  const r = routeFromHash();
+  for (const [name, el] of Object.entries(pages)){
+    if (name === r) continue;
+    if (!el.hidden){ el.classList.remove('is-lit'); await sleep(reduced ? 0 : 260); el.hidden = true; }
   }
-
-  /* creep toward 96 while the model streams in; finishBoot waits on the scene */
-  function crawl() {
-    targetPct = Math.min(96, targetPct + 6);
-    if (targetPct < 96) setTimeout(crawl, reduce ? 30 : 90);
-    else finishBoot();
+  if (r){
+    const el = pages[r];
+    el.hidden = false;
+    void el.offsetWidth;
+    el.classList.add('is-lit');
+    body.dataset.stage = 'page';
+    el.querySelector('.page__back, .page__cta, h1').focus?.();
+  } else if (body.dataset.stage === 'page'){
+    body.dataset.stage = lastStage;
   }
+}
+window.addEventListener('hashchange', applyRoute);
+document.querySelectorAll('[data-back]').forEach(b => {
+  b.addEventListener('click', () => { history.pushState(null, '', location.pathname + location.search); applyRoute(); });
+});
+window.addEventListener('popstate', applyRoute);
 
-  function tickPct() {
-    if (bootDone) return;
-    setPct(pct + (targetPct - pct) * 0.14);
-    requestAnimationFrame(tickPct);
-  }
+/* ── the canvas of work ─────────────────────────────────────────────────
+   Built and running well before it is seen: the digicam's monitor is
+   textured with this very canvas, so what plays on the screen is the page
+   itself rather than a preview of it, and the hand-off is not a cut. */
+let work = null, workShown = false, workHeld = false;
 
-  function finishBoot() {
-    // wait for the 3D scene (or bail after 9s so a slow CDN never traps anyone)
-    var released = false;
-    function release() {
-      if (released) return; released = true;
-      targetPct = 100; setPct(100);
-      setTimeout(function () {
-        bootDone = true;
-        if (boot) boot.classList.add('is-done');
-        document.body.classList.remove('is-booting');
-        document.body.classList.add('is-lit');
-      }, reduce ? 60 : 420);
-    }
-    SK.onReady(release);
-    setTimeout(release, 9000);
-  }
-
-  requestAnimationFrame(tickPct);
-  setTimeout(crawl, reduce ? 0 : 200);
-
-  /* ---------------------------------------------------------- */
-  /* AUDIO — on by default, remembered per session                */
-  /*                                                              */
-  /* Browsers will not let a page make noise before the visitor    */
-  /* has interacted with it. Two things follow, and the old code   */
-  /* got both wrong:                                              */
-  /*                                                              */
-  /*  1. `wheel` and `scroll` are NOT user-activation gestures.    */
-  /*     This is a scroll-driven site, so the first thing almost   */
-  /*     every visitor does is scroll — the old arming used        */
-  /*     {once:true} and tore down the pointer/key listeners on    */
-  /*     the first wheel event, then called play(), which was      */
-  /*     refused and swallowed. One scroll killed the music for    */
-  /*     the whole visit, and no later click could revive it.      */
-  /*     So: never disarm except on confirmed success.             */
-  /*                                                              */
-  /*  2. MUTED playback is always allowed. So the track is set     */
-  /*     rolling silently from the very first frame and is fully   */
-  /*     buffered by the time a gesture arrives — the gesture      */
-  /*     only has to unmute, which cannot fail on a load or a      */
-  /*     network stall the way a cold play() can.                  */
-  /* ---------------------------------------------------------- */
-  var audio = document.getElementById('bgAudio');
-  var btn = document.getElementById('soundToggle');
-  var wanted = false, fadeTimer = null, audible = false;
-  var VOL = 0.42;
-
-  function fadeTo(target, done) {
-    if (!audio) return;
-    clearInterval(fadeTimer);
-    var step = (target - audio.volume) / 22;
-    fadeTimer = setInterval(function () {
-      var v = audio.volume + step;
-      if ((step > 0 && v >= target) || (step < 0 && v <= target) || step === 0) {
-        audio.volume = Math.max(0, Math.min(1, target));
-        clearInterval(fadeTimer);
-        done && done();
-      } else {
-        audio.volume = Math.max(0, Math.min(1, v));
-      }
-    }, 40);
-  }
-
-  function reflect() { btn && btn.setAttribute('aria-pressed', wanted ? 'true' : 'false'); }
-
-  /* start it rolling with no sound — always permitted, and it warms the buffer */
-  function rollSilently() {
-    if (!audio) return;
-    audio.muted = true;
-    audio.volume = 0;
-    var p = audio.play();
-    if (p && p.catch) p.catch(function () {});
-  }
-
-  /* Try to actually make sound. Resolves true only if it worked.
-
-     Single-flight, and that matters: a wheel and a scroll arrive back to back,
-     so two attempts overlap. The second would read `wasMuted` off an element
-     the first had already unmuted, then "restore" it to unmuted on failure —
-     leaving the track silent AND paused, with nothing left rolling. */
-  var inFlight = null;
-  function goAudible() {
-    if (!audio) return Promise.resolve(false);
-    if (audible) return Promise.resolve(true);
-    if (inFlight) return inFlight;
-
-    var wasMuted = audio.muted;
-    audio.muted = false;
-    /* if it has been rolling silently the visitor has heard none of it, so
-       give them the top of the track rather than dropping them mid-phrase */
-    if (wasMuted) { try { audio.currentTime = 0; } catch (e) {} }
-    audio.volume = 0;
-
-    var p;
-    try { p = audio.play(); } catch (e) { p = null; }
-    var settle = function (ok) { inFlight = null; return ok; };
-    var win = function () { audible = true; fadeTo(VOL); return settle(true); };
-    var lose = function () {
-      /* unmuting without activation makes Chrome pause it — put it back */
-      audio.muted = wasMuted;
-      if (wasMuted && audio.paused) rollSilently();
-      return settle(false);
-    };
-    if (!p || !p.then) return Promise.resolve(audio.paused ? lose() : win());
-    inFlight = p.then(win, lose);
-    return inFlight;
-  }
-
-  var ARM = ['pointerdown', 'pointerup', 'click', 'keydown', 'touchstart', 'touchend', 'wheel', 'scroll'];
-  var armed = false;
-  function kick() {
-    if (!wanted || audible) { disarm(); return; }
-    goAudible().then(function (ok) { if (ok) disarm(); });
-  }
-  function arm() {
-    if (armed || !audio) return;
-    armed = true;
-    /* capture, passive, and NOT `once` — a wheel event that cannot grant
-       activation must be free to fail without costing us the next real click */
-    ARM.forEach(function (t) { window.addEventListener(t, kick, { capture: true, passive: true }); });
-  }
-  function disarm() {
-    if (!armed) return;
-    armed = false;
-    ARM.forEach(function (t) { window.removeEventListener(t, kick, true); });
-  }
-
-  function setSound(on) {
-    if (!audio) return;
-    wanted = on;
-    reflect();
-    try { sessionStorage.setItem('sk_sound', on ? '1' : '0'); } catch (e) {}
-    if (on) {
-      goAudible().then(function (ok) { if (!ok) { rollSilently(); arm(); } });
-    } else {
-      audible = false;
-      disarm();
-      fadeTo(0, function () { audio.pause(); });
-    }
-  }
-
-  if (btn) btn.addEventListener('click', function () { setSound(!wanted); });
-
-  // pause when the tab is hidden, resume if it was wanted
-  document.addEventListener('visibilitychange', function () {
-    if (!audio) return;
-    if (document.hidden) { audio.pause(); }
-    else if (wanted) { var p = audio.play(); if (p && p.catch) p.catch(function () {}); }
+/* `workHeld` is the lite path's compromise. Downloading the films costs
+   bandwidth; PLAYING them costs a hardware decoder, and on a phone the mark is
+   already using one. So the canvas is built while the mark is still on screen —
+   the eight sources start arriving — but it is not started, and nothing calls
+   play() until the mark is gone. Held, it is a shopping list; started, it is a
+   competitor. */
+function ensureWork(){
+  if (work) return work;
+  work = new WorkCanvas($('cv'), {
+    onRoute: (r) => { location.hash = '#/' + r; },
+    onFirstDrag: () => { hint.classList.add('is-gone'); }
   });
-
-  var soundOnByDefault = true;
-  try { if (sessionStorage.getItem('sk_sound') === '0') soundOnByDefault = false; } catch (e) {}
-
-  if (audio && soundOnByDefault) {
-    wanted = true;
-    reflect();
-    goAudible().then(function (ok) {
-      if (ok) return;          // high media engagement — it just plays
-      rollSilently();          // otherwise roll it muted and wait for a gesture
-      arm();
-    });
-  }
-
-  /* ---------------------------------------------------------- */
-  /* INVERT — swaps the ink and the paper, keeps pink/cyan        */
-  /* ---------------------------------------------------------- */
-  var invBtn = document.getElementById('invertToggle');
-  function setInvert(on) {
-    document.body.classList.toggle('is-invert', on);
-    if (invBtn) invBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    var meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute('content', on ? '#000000' : '#ffffff');
-    if (SK.setShellInvert) SK.setShellInvert(on);   // the PSP casing goes white
-    if (typeof onScroll === 'function') onScroll();  // repaint the backdrop tone
-    try { localStorage.setItem('sk_invert', on ? '1' : '0'); } catch (e) {}
-  }
-  if (invBtn) {
-    invBtn.addEventListener('click', function () {
-      setInvert(!document.body.classList.contains('is-invert'));
-    });
-  }
-  try { if (localStorage.getItem('sk_invert') === '1') setInvert(true); } catch (e) {}
-
-  /* ---------------------------------------------------------- */
-  /* SCROLL ENGINE                                               */
-  /* Three jobs: bleed the backdrop tone across section seams,   */
-  /* drift each element at its own rate, and reveal type as it   */
-  /* enters. Everything runs off one rAF loop.                   */
-  /* ---------------------------------------------------------- */
-  var backdrop = document.querySelector('.backdrop');
-  var secs = [].slice.call(document.querySelectorAll('.sec'));
-  var movers = [].slice.call(document.querySelectorAll('.el, .lay'));
-
-  /* how far each piece drifts, as a fraction of the viewport */
-  var DEPTH = {
-    'el--star-a': 0.16, 'el--star-b': -0.13, 'el--dice': 0.07,
-    'el--cd-a': 0.15, 'el--cd-b': -0.12, 'el--cards': 0.08,
-    'lay--shutter': -0.05, 'lay--kif': 0.05,
-    'lay--abouth': -0.04, 'lay--bio': 0.035,
-    'lay--contact': -0.05, 'lay--me': 0.05, 'lay--icons': 0.03
+  if (!workHeld) work.start();
+  /* A phone fires resize for every step of the URL bar sliding away, and each
+     one reallocates four canvases. Coalesce to one per frame. */
+  let pending = 0;
+  const onResize = () => {
+    if (pending) return;
+    pending = requestAnimationFrame(() => { pending = 0; work.resize(); });
   };
-  movers.forEach(function (m) {
-    var d = 0;
-    for (var k in DEPTH) if (m.classList.contains(k)) d = DEPTH[k];
-    m.__d = d;
+  window.addEventListener('resize', onResize, { passive:true });
+  window.addEventListener('orientationchange', onResize, { passive:true });
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize, { passive:true });
+  return work;
+}
+
+function showWork(){
+  ensureWork();
+  workHeld = false;
+  work.start();                      // idempotent; releases a held canvas
+  if (workShown) return;
+  workShown = true;
+  workWrap.hidden = false;
+  lastStage = 'work';
+  body.dataset.stage = 'work';
+  body.classList.remove('is-dark');
+  setTimeout(() => hint.classList.add('is-lit'), 500);
+  setTimeout(() => hint.classList.add('is-gone'), 7500);
+}
+
+/* ── the vignette ───────────────────────────────────────────────────────
+   Full through the mark and the iPod, lifting as the frame closes in, gone
+   by the time the page is the page. Driven off the acts' own progress, so a
+   slow machine never leaves it stranded. */
+let vigOff = false;
+function dim(v){
+  const c = Math.max(0, Math.min(1, v));
+  vig.style.opacity = c.toFixed(3);
+  const off = c <= 0.002;
+  if (off !== vigOff){ vigOff = off; vig.hidden = off; }
+}
+
+/* ── the run ────────────────────────────────────────────────────────── */
+let gl = null, ipod = null, cam = null, skipped = false;
+
+const vignetteDriver = {
+  tick(){
+    if (cam)  dim(0.82 * (1 - cam.zoomed));
+    else if (ipod) dim(1 - 0.18 * ipod.landed);
+  }
+};
+
+async function main(){
+  armGlobalGesture();
+  rollMuted();
+
+  // fonts must be resident before anything paints canvas type
+  try {
+    await Promise.race([
+      Promise.all([
+        // VCR sets two words on the iPod's screen and nothing else, so the
+        // lite path must never pay for it
+        LITE ? Promise.resolve() : document.fonts.load('400 40px "VCR OSD Mono"'),
+        document.fonts.load('500 24px "SF Pro Display"'),
+        document.fonts.load('400 24px "SF Pro Display"')
+      ]),
+      sleep(2500)
+    ]);
+  } catch (e) { /* fall back to the stack in the font-family list */ }
+
+  if (!LITE){
+    S = await import('./scene.js');
+    gl = new S.GL(glCanvas);
+    gl.acts.push(vignetteDriver);
+    gl.start();
+    // both models start downloading now and are awaited where they are used,
+    // so the camera is resident long before anyone presses play
+    ipodModel = S.load('./assets/models/ipod.glb');
+    camModel  = S.load('./assets/models/camera.glb');
+    ipodModel.catch(() => {}); camModel.catch(() => {});
+  }
+
+  /* ── the mark ─────────────────────────────────────────────────────────
+     Three ways this fails on a phone and none of them are visible on a desk:
+     autoplay refused outright (Low Power Mode does this, so does turning off
+     Auto-Play Video Previews), the decoder busy with something else, or the
+     clip simply never getting a frame out in time. The poster covers the look
+     of all three — the mark is fully drawn in frame 0 — and the clock below
+     covers the wait, so nobody stares at a still logo for five and a half
+     seconds because their battery is low. */
+  // On the lite path the films start ARRIVING under the mark but must not
+  // start PLAYING under it — see workHeld.
+  if (LITE){ workHeld = true; setTimeout(ensureWork, 2600); }
+
+  const rollMark = () => markVideo.play().catch(() => {});
+  rollMark();
+  const markDone = new Promise(res => {
+    let fired = false;
+    const go = () => { if (!fired){ fired = true; res(); } };
+    markVideo.addEventListener('ended', go, { once:true });
+    const full = setTimeout(go, reduced ? 900 : 5600);   // never hang on a stall
+    // did it actually start? currentTime is the only honest answer — readyState
+    // and the play() promise both lie when the decoder is merely busy.
+    setTimeout(() => {
+      if (markVideo.currentTime > 0.08) return;          // rolling, leave it be
+      rollMark();                                        // one more try
+      setTimeout(() => {
+        if (markVideo.currentTime > 0.08) return;
+        clearTimeout(full);
+        go();                                            // hold the still, move on
+      }, 700);
+    }, reduced ? 200 : 1400);
   });
+  await markDone;
+  if (skipped) return;
 
-  function toneOf(sec) { return sec.classList.contains('sec--dark') ? 1 : 0; }
+  markWrap.classList.add('is-out');
+  skipBtn.classList.add('is-lit');
+  await sleep(reduced ? 20 : 480);
+  markWrap.hidden = true;
+  if (skipped) return;
 
-  var ticking = false;
-  function onScroll() {
-    if (!ticking) { ticking = true; requestAnimationFrame(frame); }
-  }
+  if (LITE) return lite();
 
-  function frame() {
-    ticking = false;
-    var vh = window.innerHeight;
-    var mid = window.scrollY + vh * 0.5;
+  // ── the iPod
+  let model;
+  try { model = await ipodModel; }
+  catch (e){ console.warn('ipod failed to load', e); return finish(); }
+  if (skipped) return;
 
-    /* --- backdrop tone, blended across a band at each seam --- */
-    if (backdrop && secs.length) {
-      var band = vh * 0.6;
-      var tone = toneOf(secs[secs.length - 1]);
-      for (var i = 0; i < secs.length; i++) {
-        var top = secs[i].offsetTop, bot = top + secs[i].offsetHeight;
-        if (mid >= top && mid < bot) {
-          tone = toneOf(secs[i]);
-          if (i < secs.length - 1 && mid > bot - band) {
-            tone += (toneOf(secs[i + 1]) - tone) * ((mid - (bot - band)) / band);
-          } else if (i > 0 && mid < top + band) {
-            tone += (toneOf(secs[i - 1]) - tone) * (1 - (mid - top) / band);
-          }
-          break;
-        }
-      }
-      var inv = document.body.classList.contains('is-invert');
-      var v = Math.round((inv ? tone : 1 - tone) * 255);
-      backdrop.style.backgroundColor = 'rgb(' + v + ',' + v + ',' + v + ')';
-    }
+  ipod = new S.IpodAct(gl, model);
+  gl.acts.push(ipod);
+  gl.resize();
+  body.classList.add('is-dark');
+  body.dataset.stage = 'ipod';
+  glCanvas.classList.add('is-lit', 'is-live');
+  ipod.begin();
+  // let the entrance play out before eight films start decoding behind it
+  setTimeout(ensureWork, 3000);
 
-    /* --- per-element drift --- */
-    for (var j = 0; j < movers.length; j++) {
-      var m = movers[j];
-      if (!m.__d) continue;
-      var r = m.parentNode.getBoundingClientRect();
-      if (r.bottom < -vh || r.top > vh * 2) continue;      // far off-screen, skip
-      var p = (r.top + r.height / 2 - vh / 2) / vh;        // -1 .. 1 through the viewport
-      m.style.setProperty('--ty', (p * m.__d * vh).toFixed(1) + 'px');
-    }
-  }
-
-  window.addEventListener('scroll', onScroll, { passive: true });
-  window.addEventListener('resize', onScroll, { passive: true });
-  frame();
-
-  /* reveal the type and the cut-outs as each section arrives */
-  if ('IntersectionObserver' in window && !reduce) {
-    var lays = [].slice.call(document.querySelectorAll('.lay, .el'));
-    lays.forEach(function (n) { n.classList.add('rev'); });
-    var ro = new IntersectionObserver(function (es) {
-      es.forEach(function (e) {
-        if (e.isIntersecting) { e.target.classList.add('is-shown'); ro.unobserve(e.target); }
-      });
-    }, { threshold: 0, rootMargin: '0px 0px -6% 0px' });
-    lays.forEach(function (n) { ro.observe(n); });
-
-    /* Failsafe — nothing may be left hidden because an observer misfired.
-       PER ELEMENT, not blanket: it only shows what is actually on screen, so a
-       section further down still gets its animation when you reach it. An
-       earlier build force-showed everything 2.5s after load and killed every
-       reveal past the fold; the one before that left all body text invisible.
-       Do not remove this, and do not turn it back into a blanket timeout. */
-    var showIfNear = function () {
-      var vh = window.innerHeight, live = 0;
-      for (var z = 0; z < lays.length; z++) {
-        var el = lays[z];
-        if (el.classList.contains('is-shown')) continue;
-        live++;
-        var r = el.getBoundingClientRect();
-        if (r.top < vh && r.bottom > 0) { el.classList.add('is-shown'); ro.unobserve(el); }
-      }
-      if (!live && guard) { clearInterval(guard); guard = null; }
-    };
-    var guard = setInterval(showIfNear, 900);
-    showIfNear();
-    window.addEventListener('scroll', showIfNear, { passive: true });
-    window.addEventListener('resize', showIfNear, { passive: true });
-  }
-
-  /* ---------------------------------------------------------- */
-  /* SMOOTH IN-PAGE NAV                                          */
-  /* ---------------------------------------------------------- */
-  document.querySelectorAll('[data-nav]').forEach(function (a) {
-    a.addEventListener('click', function (e) {
-      var id = a.getAttribute('href');
-      if (!id || id.charAt(0) !== '#') return;
-      var t = document.querySelector(id);
-      if (!t) return;
-      e.preventDefault();
-      t.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
-    });
+  // drag to turn it, exactly as the PSP turned on the last site; a tap on
+  // the wheel's play glyph is a press, a drag is not.
+  glCanvas.addEventListener('pointerdown', e => {
+    if (!ipod) return;
+    glCanvas.setPointerCapture(e.pointerId);
+    ipod.grabAt(e.clientX, e.clientY);
+    glCanvas.classList.add('is-turning');
   });
+  glCanvas.addEventListener('pointermove', e => {
+    if (!ipod) return;
+    if (!ipod.moveTo(e.clientX, e.clientY)){
+      glCanvas.classList.toggle('is-hot', ipod.hover(e.clientX, e.clientY));
+    }
+  });
+  const lift = async (e) => {
+    if (!ipod) return;
+    const travelled = ipod.release();
+    glCanvas.classList.remove('is-turning');
+    if (travelled > 7) return;                       // that was a turn
+    if (!ipod.press(e.clientX, e.clientY)) return;
+    glCanvas.classList.remove('is-hot');
+    await goAudible();
+    toCamera();
+  };
+  glCanvas.addEventListener('pointerup', lift);
+  glCanvas.addEventListener('pointercancel', () => { if (ipod) ipod.release(); glCanvas.classList.remove('is-turning'); });
+}
 
-  /* ---------------------------------------------------------- */
-  /* SECTION REVEALS                                             */
-  /* ---------------------------------------------------------- */
-  if ('IntersectionObserver' in window) {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (en) {
-        if (en.isIntersecting) { en.target.classList.add('is-in'); io.unobserve(en.target); }
-      });
-    }, { threshold: 0.18 });
-    document.querySelectorAll('.about, .contact').forEach(function (el) { io.observe(el); });
+async function toCamera(){
+  if (skipped) return;
+  const act = ipod;
+  ipod = null;
+  glCanvas.classList.remove('is-live', 'is-hot');
+  await act.fadeOut(reduced ? 60 : 560);
+  gl.acts = gl.acts.filter(a => a !== act);
+  act.dispose();
+  if (skipped) return;
+
+  let model;
+  try { model = await camModel; }
+  catch (e){ console.warn('camera failed to load', e); return finish(); }
+  if (skipped) return;
+
+  body.classList.remove('is-dark');   // back to paper for the digicam
+
+  cam = new S.CameraAct(gl, model, ensureWork().cv, {
+    // the plane goes up underneath only once the monitor's edges ARE the
+    // viewport's edges; the camera's own fade is then the cross-dissolve
+    onReveal: () => { showWork(); skipBtn.classList.remove('is-lit'); },
+    onDone: finish
+  });
+  gl.acts.push(cam);
+  gl.resize();
+  cam.begin();
+}
+
+/* The mark fades, the plane comes up under it, and the vignette — which on
+   the full path is driven off the acts' own progress — eases off on its own
+   clock, because on this path there is no act to read a progress from. Both
+   ends of the ramp are clamped: rAF hands you the timestamp of the START of
+   the frame, which can predate the performance.now() that scheduled it, and
+   an unclamped p goes negative. */
+function lite(){
+  glCanvas.hidden = true;
+  skipBtn.classList.remove('is-lit');
+  showWork();
+  const t0 = performance.now(), D = reduced ? 1 : 1000;
+  const ease = (now) => {
+    const p = Math.max(0, Math.min(1, (now - t0) / D));
+    dim(0.82 * (1 - p * p * (3 - 2 * p)));
+    if (p < 1) requestAnimationFrame(ease);
+  };
+  requestAnimationFrame(ease);
+  applyRoute();
+}
+
+function finish(){
+  if (cam){ gl.acts = gl.acts.filter(a => a !== cam); cam.dispose(); cam = null; }
+  if (ipod){ gl.acts = gl.acts.filter(a => a !== ipod); ipod.dispose(); ipod = null; }
+  if (gl){ gl.stop(); }
+  glCanvas.classList.remove('is-lit', 'is-live', 'is-hot');
+  glCanvas.hidden = true;
+  skipBtn.classList.remove('is-lit');
+  body.classList.remove('is-dark');
+  dim(0);
+  showWork();
+  applyRoute();
+}
+
+// a handle for the verification harness — inert in normal use
+window.__NOMAD = {
+  lite: LITE,
+  get gl(){ return gl; }, get ipod(){ return ipod; },
+  get cam(){ return cam; }, get work(){ return work; },
+  /** hold an act at a fixed moment so a frame can be captured deterministically */
+  freeze(act, ms){
+    const a = act === 'cam' ? cam : ipod;
+    if (!a) return false;
+    a.freeze = ms; a.running = true;
+    if (a.rig) a.rig.visible = true;
+    return true;
+  },
+  seek(act, ms){
+    const a = act === 'cam' ? cam : ipod;
+    if (!a) return false;
+    a.freeze = null;
+    a.t0 = performance.now() - ms; a.running = true;
+    if (a.rig) a.rig.visible = true;
+    return true;
   }
-})();
+};
+
+skipBtn.addEventListener('click', async () => {
+  if (skipped) return;
+  skipped = true;
+  markWrap.classList.add('is-out');
+  markWrap.hidden = true;
+  await goAudible();
+  finish();
+});
+
+applyRoute();
+main();
