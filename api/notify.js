@@ -10,19 +10,35 @@ export default async function handler(req, res) {
   }
 
   try {
-    const city = decodeURIComponent(req.headers["x-vercel-ip-city"] || "Unknown City");
-    const country = req.headers["x-vercel-ip-country"] || "Unknown Country";
-    const ip = req.headers["x-forwarded-for"]?.split(",")[0] ||
-      req.socket?.remoteAddress ||
-      "Unknown IP";
-    const userAgent = req.headers["user-agent"] || "Unknown User Agent";
+    const data = req.body || {};
+    
+    const city = decodeURIComponent(req.headers["x-vercel-ip-city"] || "Unknown");
+    const country = req.headers["x-vercel-ip-country"] || "Unknown";
+    const ip = req.headers["x-forwarded-for"]?.split(',')[0] || req.socket.remoteAddress || "Unknown";
+    const userAgent = req.headers["user-agent"] || "Unknown";
+    
+    const rawReferrer = req.headers["referer"] || data.referrer || "Direct";
+    let trafficSource = rawReferrer;
+    if (rawReferrer.includes("instagram.com") || data.utmSource === "instagram") {
+      trafficSource = "Instagram Bio";
+    }
+
+    const clean = (val, max = 250) => String(val || "Unknown").replace(/[\r\n]/g, " ").slice(0, max);
 
     const message = [
-      "👀 New Portfolio Visitor!",
-      `City: ${city}`,
-      `Country: ${country}`,
+      "New Portfolio Visitor",
+      `Location: ${city}, ${country}`,
       `IP: ${ip}`,
-      `User agent: ${userAgent}`
+      `Source: ${clean(trafficSource, 150)}`,
+      `Duration: ${clean(data.duration || "0 seconds")}`,
+      `Screen: ${clean(data.screenSize)}`,
+      `Theme: ${clean(data.theme)}`,
+      `Battery: ${clean(data.battery)}`,
+      `Network: ${clean(data.network)}`,
+      `Hardware: ${clean(data.deviceMemory)}GB RAM, ${clean(data.hardwareConcurrency)} Cores`,
+      `Timezone: ${clean(data.timezone)}`,
+      `Fingerprint: ${clean(data.fingerprint)}`,
+      `User Agent: ${clean(userAgent, 300)}`
     ].join("\n");
 
     const telegram = await fetch(
@@ -39,7 +55,7 @@ export default async function handler(req, res) {
     }
 
     return res.status(200).json({ ok: true });
-  } catch {
+  } catch (error) {
     return res.status(500).json({ error: "Notification failed" });
   }
 }
