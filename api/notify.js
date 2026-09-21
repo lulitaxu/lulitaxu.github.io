@@ -10,16 +10,19 @@ export default async function handler(req, res) {
   }
 
   try {
-    const data = req.body || {};
-    const clean = (value, max = 300) =>
-      String(value || "Unknown").replace(/[\r\n]/g, " ").slice(0, max);
+    const city = decodeURIComponent(req.headers["x-vercel-ip-city"] || "Unknown City");
+    const country = req.headers["x-vercel-ip-country"] || "Unknown Country";
+    const ip = req.headers["x-forwarded-for"]?.split(",")[0] ||
+      req.socket?.remoteAddress ||
+      "Unknown IP";
+    const userAgent = req.headers["user-agent"] || "Unknown User Agent";
 
     const message = [
       "👀 New Portfolio Visitor!",
-      `City: ${clean(data.city, 100)}`,
-      `Country: ${clean(data.country, 100)}`,
-      `IP: ${clean(data.ip, 100)}`,
-      `User agent: ${clean(data.userAgent)}`
+      `City: ${city}`,
+      `Country: ${country}`,
+      `IP: ${ip}`,
+      `User agent: ${userAgent}`
     ].join("\n");
 
     const telegram = await fetch(
