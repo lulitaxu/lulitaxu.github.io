@@ -1,8 +1,4 @@
-/* ============================================================
-   shutter kif. — black & white, gritty, minimal
-   Composed sections sit on a 16:9 stage carrying the exact PSD
-   coordinates in percent.
-   ============================================================ */
+
 
 @font-face{font-family:'Helv';src:url('../assets/fonts/Helvetica.woff') format('woff'),url('../assets/fonts/Helvetica.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:'Helv';src:url('../assets/fonts/Helvetica-Oblique.woff') format('woff'),url('../assets/fonts/Helvetica-Oblique.ttf') format('truetype');font-weight:400;font-style:italic;font-display:swap}
@@ -172,8 +168,39 @@ body.is-invert .boot{--el-inv:1}
 @keyframes spin-cw {to{--spin:360deg}}
 @keyframes spin-ccw{to{--spin:-360deg}}
 .el--dice  {left:32.45%;top:19.26%;width:35.10%}
-.lay--shutter{left:28.33%;top:43.0%;font-size:4cqw;font-style:italic}
-.lay--kif    {left:59.84%;top:43.0%;font-size:4cqw;font-style:italic}
+.lay--brand{
+  left:69%;font-size:4cqw;font-style:italic;white-space:nowrap;isolation:isolate;
+  animation:name-float 4.8s ease-in-out infinite;
+}
+.lay--arafat{left:18%;top:28%}
+.lay--arzu{left:69%;top:61%;animation-delay:-2.4s}
+.lay--mark {left:59.84%;top:43.0%;font-size:4cqw;font-style:italic}
+.lay--brand > .glitch-top,.lay--brand > .glitch-bottom{
+  position:absolute;inset:0;pointer-events:none;
+  opacity:.7;z-index:-1;font:inherit;line-height:inherit;letter-spacing:inherit;
+}
+.lay--brand > .glitch-top{
+  color:currentColor;text-shadow:-2px 0 rgba(255,255,255,.72);
+  clip-path:inset(12% 0 62% 0);animation:glitch-top 3.4s steps(2,end) infinite;
+}
+.lay--brand > .glitch-bottom{
+  color:currentColor;text-shadow:2px 0 rgba(150,150,150,.75);
+  clip-path:inset(68% 0 10% 0);animation:glitch-bottom 2.7s steps(2,end) infinite;
+}
+@keyframes name-float{
+  0%,100%{transform:translateY(calc(var(--ty,0px) - 4px)) rotate(-2deg)}
+  50%{transform:translateY(calc(var(--ty,0px) + 4px)) rotate(1deg)}
+}
+@keyframes glitch-top{
+  0%,88%,100%{transform:translate(0)}
+  89%{transform:translate(-3px,-1px)}
+  91%{transform:translate(2px,1px)}
+}
+@keyframes glitch-bottom{
+  0%,76%,100%{transform:translate(0)}
+  77%{transform:translate(3px,1px)}
+  79%{transform:translate(-2px,-1px)}
+}
 
 .cue{position:absolute;bottom:1.5rem;left:50%;transform:translateX(-50%);z-index:6;padding:.6rem}
 .cue i{display:block;width:1px;height:34px;background:currentColor;opacity:.3;position:relative;overflow:hidden}
@@ -238,12 +265,33 @@ kbd{font-family:var(--f-vcr);font-size:.8rem;border:1px solid currentColor;opaci
 .el--cd-b  {left:82.08%;top:45.83%;width:29.90%}
 .lay--abouth{left:50%;top:26%;transform:translate(-50%,var(--ty,0));font-family:var(--f-vcr);font-size:3.3cqw;letter-spacing:.06em}
 .lay--bio{
-  left:50%;top:38%;width:44%;margin-left:-22%;
-  font-size:1.78cqw;line-height:1.3;letter-spacing:0;
-  text-align:justify;text-justify:inter-word;hyphens:auto;
+  left:50%;top:37%;width:42%;margin-left:-21%;
+  font-family:var(--f-vcr);font-size:1.32cqw;line-height:1.45;letter-spacing:.025em;
+  text-align:left;
 }
 .lay--bio p{margin:0}
-.lay--bio p+p{margin-top:.15em}
+.lay--bio p+p{margin-top:1.1em}
+.lay--bio .bio__lead{
+  font-family:var(--f);font-size:1.9cqw;line-height:1.05;letter-spacing:-.01em;
+}
+.bio__name{position:relative;display:inline-block;isolation:isolate}
+.bio__name > .glitch-top,.bio__name > .glitch-bottom{
+  position:absolute;inset:0;pointer-events:none;z-index:-1;
+  font:inherit;line-height:inherit;letter-spacing:inherit;opacity:.72;
+}
+.bio__name > .glitch-top{
+  color:currentColor;text-shadow:-2px 0 rgba(255,255,255,.72);
+  clip-path:inset(10% 0 64% 0);animation:glitch-top 3.1s steps(2,end) infinite;
+}
+.bio__name > .glitch-bottom{
+  color:currentColor;text-shadow:2px 0 rgba(150,150,150,.75);
+  clip-path:inset(68% 0 8% 0);animation:glitch-bottom 2.5s steps(2,end) infinite;
+}
+.bio__lead i{font-size:.48em;letter-spacing:.08em;line-height:2;text-transform:uppercase}
+.bio__meta{
+  display:flex;justify-content:space-between;margin-top:1.5em;padding-top:.55em;
+  border-top:1px solid currentColor;font-size:.68em;letter-spacing:.12em;text-transform:uppercase;opacity:.55;
+}
 
 /* ---- 04 contact ---- */
 /* Bottom-aligned, not centred: the comp puts the mail and Instagram marks at
@@ -255,8 +303,9 @@ kbd{font-family:var(--f-vcr);font-size:.8rem;border:1px solid currentColor;opaci
   --vtop:calc(100% - 100svh);--vbot:100%;
 }
 .el--cards{left:26.67%;top:-3.52%;width:46.67%}
-.lay--contact{left:23.54%;top:40.0%;font-size:3.78cqw}
-.lay--me     {left:64.27%;top:40.0%;font-size:3.78cqw}
+.el--watch{left:33%;top:8%;width:34%;z-index:2}
+.lay--contact{left:19%;top:27%;font-size:3.78cqw}
+.lay--me     {left:66%;top:61%;font-size:3.78cqw}
 .lay--icons{left:45.94%;top:89.7%;display:flex;align-items:center;gap:1.1%}
 .lay--icons img{width:100%;transition:transform .4s var(--ease)}
 .lay--icons a:first-child{width:3.70cqw}
@@ -295,17 +344,22 @@ kbd{font-family:var(--f-vcr);font-size:.8rem;border:1px solid currentColor;opaci
     width:100vw;height:auto;min-height:100svh;container-type:normal;
     -webkit-mask-image:none;mask-image:none;
   }
-  .lay--shutter{left:6%;top:36%;font-size:9vw}
-  .lay--kif{left:62%;top:54%;font-size:9vw}
+  .lay--brand{left:5%;font-size:6vw}
+  .lay--arafat{top:29%}
+  .lay--arzu{left:70%;top:60%}
+  .lay--mark{left:91%;top:54%;font-size:7vw}
   .el--dice{left:20%;top:40%;width:58%}
   .el--star-a{left:54%;top:1%;width:54%}
   .el--star-b{left:-26%;top:64%;width:92%}
   .lay--abouth{left:50%;top:18%;transform:translate(-50%,var(--ty,0));font-size:6.4vw}
-  .lay--bio{left:6%;top:32%;width:88%;margin-left:0;font-size:3.9vw;text-align:left}
+  .lay--bio{left:8%;top:31%;width:84%;margin-left:0;font-size:3.2vw;line-height:1.45}
+  .lay--bio .bio__lead{font-size:6.2vw}
+  .bio__meta{margin-top:1.4em;font-size:.72em}
   .el--cd-a{left:-16%;top:-5%;width:58%}
   .el--cd-b{left:62%;top:80%;width:48%}
-  .lay--contact{left:6%;top:33%;font-size:9vw}
-  .lay--me{left:60%;top:57%;font-size:9vw}
+  .el--watch{left:21%;top:19.5%;width:58%}
+  .lay--contact{left:7%;top:28%;font-size:9vw}
+  .lay--me{left:64%;top:59%;font-size:9vw}
   .el--cards{left:19%;top:34%;width:64%}
   .el--flower{width:130%;left:-15%;top:22%}
   .lay--icons{left:39%;top:90%;gap:3%}
@@ -321,6 +375,8 @@ kbd{font-family:var(--f-vcr);font-size:.8rem;border:1px solid currentColor;opaci
   .rev{opacity:1;filter:none;visibility:visible;transition:none}
   .el.rev,.el.rev.is-shown{opacity:1;filter:invert(var(--el-inv));transition:none}
   .el,.lay{--ty:0 !important}
+  .lay--brand{animation:none;transform:translateY(var(--ty,0))}
+  .bio__name > .glitch-top,.bio__name > .glitch-bottom{animation:none}
   [data-rise]{opacity:1;transform:none;filter:none;transition:none}
   .lay--icons img,.rail__open,.ctl__b::after{transition:none}
 }

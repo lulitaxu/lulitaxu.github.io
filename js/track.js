@@ -1,18 +1,4 @@
-/* ============================================================
-   SHUTTERKIF OS — tracking overlay.
 
-   A thin grey layer of motion-tracking furniture over each composed section:
-   contour trackers locked to the cut-outs (silhouettes come from
-   js/contours.js, extracted from the artwork at build time) plus free-floating
-   ambient nodes drifting around the frame.
-
-   Two rules it must never break:
-     · nothing may cross the type — every .lay is punched out of the clip, and
-       the canvas sits under the type in z-order as a second line of defence;
-     · it stays quiet — one hairline, mid grey off --trk, no fills, no colour.
-
-   Plain script, no module. Draws only while its section is on screen.
-   ============================================================ */
 (function () {
   'use strict';
 
